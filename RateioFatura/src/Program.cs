@@ -1,7 +1,7 @@
 // Rateio da Fatura - abridor do aplicativo.
 // O executável carrega a página (app.html) embutida, grava em
 // %LOCALAPPDATA%\RateioFatura e abre numa janela própria do Microsoft Edge.
-// Os dados que você digita ficam salvos no navegador, nesse mesmo caminho.
+// Os dados ficam no banco (Supabase), com uma cópia no navegador, nesse mesmo caminho.
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Rateio da Fatura")]
 [assembly: AssemblyProduct("Rateio da Fatura")]
-[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.1.0")]
 
 static class Program
 {

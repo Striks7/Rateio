@@ -11,9 +11,12 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 $page   = [IO.File]::ReadAllText((Join-Path $src 'rateio-fatura.html'), $utf8)
 $pdf    = [IO.File]::ReadAllText((Join-Path $src 'lib\pdf.min.js'), $utf8)
 $worker = [IO.File]::ReadAllText((Join-Path $src 'lib\pdf.worker.min.js'), $utf8)
+$supa   = [IO.File]::ReadAllText((Join-Path $src 'lib\supabase.min.js'), $utf8)
 
-# Página completa, com o leitor de PDF embutido para funcionar sem internet.
-$html = '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>' +
+# Página completa, com o leitor de PDF e a biblioteca do banco (Supabase) embutidos.
+# O Supabase entra no <head> porque o login usa ele assim que a página abre.
+$html = '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        "`n<script>" + $supa + "</script></head><body>" +
         $page + "`n<script>" + $pdf + "</script>`n<script>" + $worker + "</script></body></html>"
 $app = Join-Path $out 'app.html'
 [IO.File]::WriteAllText($app, $html, $utf8)

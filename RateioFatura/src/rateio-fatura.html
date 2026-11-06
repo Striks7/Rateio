@@ -73,7 +73,10 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .theme .moon.on { color: var(--p2); }
 .theme:hover .ic:not(.on) { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) { .theme .ic { transition: none; } }
-.who { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; }
+.who { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; flex-wrap: wrap; }
+.sync { font-size: 12px; font-weight: 600; color: var(--muted); }
+.sync.ok::before { content: "✓ "; color: var(--ok); }
+.sync.offline, .sync.error { color: var(--warn); }
 
 /* login */
 body:not(.unlocked) .nav, body:not(.unlocked) main { display: none; }
@@ -296,7 +299,7 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
     <a class="brand" href="#inicio"><span class="logo" aria-hidden="true"><i></i><i></i><i></i></span>Rateio da Fatura</a>
     <div class="nav-right">
       <nav class="tabs" id="tabs" aria-label="Telas"></nav>
-      <span class="who"><span id="whoami" class="muted"></span><button class="link" id="accountsBtn" type="button">Contas</button><button class="link" id="logoutBtn" type="button">Sair</button></span>
+      <span class="who"><span id="syncState" class="sync" role="status"></span><span id="whoami" class="muted"></span><button class="link" id="accountsBtn" type="button">Contas</button><button class="link" id="logoutBtn" type="button">Sair</button></span>
       <button class="theme" id="themeBtn" type="button" aria-label="Mudar para o tema escuro">
         <span class="ic sun" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg></span>
         <span class="ic moon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></span>
@@ -523,8 +526,10 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
 
 <script id="app">
 (function () {
-  // Cada conta tem as próprias faturas: a chave de armazenamento leva o e-mail de quem entrou.
+  // Cada conta tem as próprias faturas, salvas no banco (Supabase). O navegador guarda uma cópia
+  // com o e-mail de quem entrou na chave, para abrir rápido e continuar funcionando sem internet.
   var P = window.FaturaParser, BASE = 'rateio-fatura-v2', KEY = BASE;
+  var sb = null, me = null;
   var $ = function (id) { return document.getElementById(id); };
   var money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
   var fmt = function (c) { return money.format((c || 0) / 100).replace(/ /g, ' '); };
@@ -558,7 +563,46 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
     } catch (e) { /* sem armazenamento */ }
     return { v: 2, people: [], faturas: [] };
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* segue sem salvar */ } }
+
+  // ---------- nuvem ----------
+  // Toda mudança vai primeiro para a cópia do navegador e, logo depois, para o banco.
+  // Sem internet, a mudança fica marcada como pendente e sobe quando a conexão volta.
+  // Ao abrir (ou voltar para a janela), o sistema busca a versão do banco, que vale para todos os aparelhos.
+  var sync = { timer: null, rev: 0, busy: false };
+  function isNetErr(e) { return navigator.onLine === false || /fetch|network|load failed/i.test(String((e && e.message) || e || '')); }
+  function cacheWrite() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* segue sem cópia local */ } }
+  function isDirty() { try { return localStorage.getItem(KEY + ':pendente') === '1'; } catch (e) { return sync.rev > 0; } }
+  function setDirty(on) { try { if (on) localStorage.setItem(KEY + ':pendente', '1'); else localStorage.removeItem(KEY + ':pendente'); } catch (e) { /* ok */ } }
+  function syncState(s) {
+    var el = $('syncState'); if (!el) return;
+    el.textContent = { loading: 'Buscando na nuvem…', saving: 'Salvando…', ok: 'Salvo na nuvem', offline: 'Sem internet · salvo neste aparelho', error: 'Não consegui salvar na nuvem' }[s] || '';
+    el.className = 'sync ' + s;
+  }
+  function save() { cacheWrite(); setDirty(true); sync.rev++; syncState('saving'); clearTimeout(sync.timer); sync.timer = setTimeout(push, 700); }
+  function push() {
+    if (!sb || !me) return;
+    if (sync.busy) { clearTimeout(sync.timer); sync.timer = setTimeout(push, 400); return; }
+    var rev = sync.rev; sync.busy = true; syncState('saving');
+    sb.from('rateio').upsert({ user_id: me.id, dados: db, atualizado: new Date().toISOString() }).then(function (r) {
+      sync.busy = false;
+      if (r.error) throw r.error;
+      if (rev === sync.rev) { setDirty(false); syncState('ok'); }
+    }).catch(function (e) { sync.busy = false; syncState(isNetErr(e) ? 'offline' : 'error'); });
+  }
+  function pull() {
+    if (!sb || !me) return;
+    if (isDirty()) { push(); return; }
+    sb.from('rateio').select('dados').eq('user_id', me.id).maybeSingle().then(function (r) {
+      if (r.error) throw r.error;
+      if (isDirty()) { push(); return; }
+      if (r.data && r.data.dados) {
+        var remote = Object.assign({ v: 2, people: [], faturas: [] }, r.data.dados);
+        if (JSON.stringify(remote) !== JSON.stringify(db)) { db = remote; cacheWrite(); render(); }
+        syncState('ok');
+      } else if (db.faturas.length || db.people.length) { setDirty(true); push(); } // primeira vez: sobe o que já estava neste aparelho
+      else syncState('ok');
+    }).catch(function (e) { syncState(isNetErr(e) ? 'offline' : 'error'); });
+  }
   function commit() { save(); render(); }
   function snap() { return JSON.stringify({ db: db, curId: ui.curId }); }
   function cur() { return db.faturas.filter(function (f) { return f.id === ui.curId; })[0] || null; }
@@ -651,7 +695,7 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
           '<p class="lead">Abra a fatura do banco, diga quem usou o cartão e toque no nome de quem paga cada compra. A conta de cada um sai pronta para mandar.</p>' +
           '<ol class="steps"><li><b style="--c:var(--p0)">1</b>Abra a fatura em PDF, CSV ou OFX</li><li><b style="--c:var(--p1)">2</b>Adicione as pessoas que usaram o cartão</li><li><b style="--c:var(--p2)">3</b>Toque no nome de quem paga cada lançamento</li></ol>' +
           '<div class="row"><button class="btn primary" type="button" data-act="open-file">Abrir fatura</button><button class="btn" type="button" data-act="paste-open">Colar texto</button><button class="btn" type="button" data-act="blank">Começar em branco</button></div>' +
-          '<p class="small muted">O arquivo é lido aqui mesmo e não é enviado para a internet.</p></div>' +
+          '<p class="small muted">O arquivo é lido aqui mesmo e não é enviado para a internet. Só os lançamentos ficam salvos na sua conta.</p></div>' +
         '<div class="drop" role="button" tabindex="0" data-act="open-file" aria-label="Escolher arquivo da fatura"><div style="display:grid;gap:12px;justify-items:center">' +
           '<div class="drop-art" aria-hidden="true"><span class="mini-card a"></span><span class="mini-card b"></span></div>' +
           '<strong>Arraste a fatura para cá</strong><span class="muted">ou clique para escolher o arquivo</span></div></div>' +
@@ -1090,76 +1134,53 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
   paintTheme();
 
   // Sempre abre na tela inicial, sem fatura aberta. Só começa depois do login.
-  window.__startApp = function (email, owner) {
-    KEY = BASE + ':' + email; db = load(owner);
+  window.__startApp = function (user, client) {
+    me = user; sb = client; KEY = BASE + ':' + user.email; db = load(user.owner);
     go(location.hash === '#historico' ? 'historico' : 'inicio');
+    syncState(isDirty() ? 'saving' : 'loading'); pull();
+    window.addEventListener('online', pull);
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') pull(); });
   };
 })();
 </script>
 
 <script id="auth-script">
 (function () {
-  // ====== CONFIGURAÇÃO DO E-MAIL (EmailJS) ======
-  // Preencha com os dados da sua conta em https://www.emailjs.com (veja o LEIA-ME).
-  // O código de confirmação vai para o e-mail da própria pessoa que está se cadastrando.
+  // ====== CONFIGURAÇÃO DO BANCO DE DADOS (Supabase) ======
+  // Preencha com os dados do seu projeto em https://supabase.com (veja o LEIA-ME):
+  // Project Settings > API Keys: "Project URL" e a chave pública (anon ou publishable).
+  // Essa chave pode ficar no código: quem protege os dados são as regras do banco (supabase\schema.sql).
   var CONFIG = {
-    serviceId: 'service_h09hfr5',
-    templateId: 'template_ar9whyv',
-    publicKey: 'UVdMFlKRM_8dM2BcD'
+    url: '',
+    anonKey: ''
   };
-  // ==============================================
-  window.RateioAuthConfig = CONFIG;
+  // =======================================================
 
-  var UKEY = 'rateio-fatura-contas', SKEY = 'rateio-fatura-sessao';
+  var OWNER = 'nicolasrenan10@gmail.com', RESEND_GAP = 60000;
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
-  var st = { mode: 'login', msg: null, email: '', fails: 0, lockUntil: 0, busy: false };
+  var st = { mode: 'login', msg: null, email: '', busy: false, lastSend: 0, recovered: false };
+  var sb = null, current = null, acc = { list: null, confirm: null, msg: null, busy: false };
 
-  function users() { try { return JSON.parse(localStorage.getItem(UKEY) || '[]'); } catch (e) { return []; } }
-  function saveUsers(u) { try { localStorage.setItem(UKEY, JSON.stringify(u)); return true; } catch (e) { return false; } }
-  function find(email) { var e = norm(email); return users().filter(function (u) { return u.email === e; })[0] || null; }
-  function update(user) { var u = users().filter(function (x) { return x.email !== user.email; }); u.push(user); saveUsers(u); }
   function norm(e) { return String(e || '').trim().toLowerCase(); }
-  function b64(buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); }
-  function salt() { var a = new Uint8Array(16); crypto.getRandomValues(a); return b64(a.buffer); }
-  function hash(secret, s) {
-    var enc = new TextEncoder();
-    return crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveBits']).then(function (k) {
-      return crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode(s), iterations: 150000, hash: 'SHA-256' }, k, 256);
-    }).then(b64);
-  }
-  function code() {
-    var abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', a = new Uint8Array(6), out = '';
-    crypto.getRandomValues(a); for (var i = 0; i < 6; i++) out += abc[a[i] % abc.length];
-    return out;
-  }
-  // ----- proteção contra robôs e tentativas repetidas -----
-  var GKEY = 'rateio-fatura-protecao';
-  var SEND_GAP = 60000, SEND_MAX = 5, SEND_WINDOW = 3600000, CODE_TTL = 15 * 60000, CODE_TRIES = 5;
-  function guard() { try { return JSON.parse(localStorage.getItem(GKEY) || '{}'); } catch (e) { return {}; } }
-  function saveGuard(g) { try { localStorage.setItem(GKEY, JSON.stringify(g)); } catch (e) { /* ok */ } }
   function waitText(ms) { return ms >= 60000 ? Math.ceil(ms / 60000) + ' minuto(s)' : Math.ceil(ms / 1000) + ' segundos'; }
-  // No máximo 1 código por minuto para cada e-mail e 5 por hora neste computador.
-  function sendBlock(email) {
-    var g = guard(), now = Date.now(), list = (g.sends || []).filter(function (t) { return now - t < SEND_WINDOW; }), last = (g.last || {})[email] || 0;
-    if (now - last < SEND_GAP) return 'Espere ' + waitText(SEND_GAP - (now - last)) + ' para pedir outro código.';
-    if (list.length >= SEND_MAX) return 'Muitos códigos pedidos neste computador. Tente de novo em ' + waitText(SEND_WINDOW - (now - list[0])) + '.';
-    return '';
+  // Traduz os erros do Supabase para mensagens em português.
+  function errText(e) {
+    var m = String((e && (e.message || e.error_description)) || e || ''), c = (e && e.code) || '';
+    if (navigator.onLine === false || /fetch|network|load failed/i.test(m)) return 'Sem conexão com a internet. Confira a conexão e tente de novo.';
+    if (c === 'invalid_credentials' || /invalid login/i.test(m)) return 'E-mail ou senha incorretos.';
+    if (c === 'email_not_confirmed' || /not confirmed/i.test(m)) return 'Sua conta ainda não foi confirmada.';
+    if (c === 'otp_expired' || /expired|invalid.*(otp|token)|token.*(invalid|expired)/i.test(m)) return 'Código errado ou vencido. Confira o código ou peça outro.';
+    var s = m.match(/after (\d+) seconds?/i);
+    if (s) return 'Espere ' + s[1] + ' segundos para pedir outro código.';
+    if (/rate limit|too many/i.test(m) || c === 'over_email_send_rate_limit' || c === 'over_request_rate_limit') return 'Muitas tentativas seguidas. Espere alguns minutos e tente de novo.';
+    if (c === 'weak_password' || /password should|weak/i.test(m)) return 'Senha fraca. Use pelo menos 8 caracteres, misturando letras e números.';
+    if (c === 'same_password') return 'A nova senha precisa ser diferente da antiga.';
+    if (c === 'user_already_exists' || /already registered/i.test(m)) return 'Já existe uma conta com esse e-mail. Use "Entrar".';
+    if (/sending.*email|smtp/i.test(m)) return 'O banco não conseguiu mandar o e-mail. Confira a configuração de e-mail (SMTP) do Supabase.';
+    return 'Não deu certo: ' + m;
   }
-  function recordSend(email) {
-    var g = guard(), now = Date.now();
-    g.sends = (g.sends || []).filter(function (t) { return now - t < SEND_WINDOW; }).concat(now);
-    g.last = g.last || {}; g.last[email] = now; saveGuard(g);
-  }
-  // Login: a cada 5 senhas erradas o e-mail fica bloqueado 1, 2, 4, 8... até 30 minutos.
-  function lockLeft(email) { var f = (guard().fails || {})[email]; return f && f.until > Date.now() ? f.until - Date.now() : 0; }
-  function addFail(email) {
-    var g = guard(); g.fails = g.fails || {};
-    var f = g.fails[email] || { n: 0, until: 0 }; f.n++;
-    if (f.n % 5 === 0) f.until = Date.now() + Math.min(30, Math.pow(2, f.n / 5 - 1)) * 60000;
-    g.fails[email] = f; saveGuard(g); return f;
-  }
-  function clearFails(email) { var g = guard(); if (g.fails && g.fails[email]) { delete g.fails[email]; saveGuard(g); } }
+
   // Verificação anti-robô: campo invisível (robôs preenchem), tempo mínimo e uma conta simples.
   function botFields() {
     var a = 1 + Math.floor(Math.random() * 9), b = 1 + Math.floor(Math.random() * 9);
@@ -1179,202 +1200,237 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
     if (/https?:|www\.|[<>@\/\\{}]/i.test(n)) return 'O nome não pode ter links nem símbolos como < > @ /.';
     return '';
   }
-  function dropCode(cu) {
-    if (cu.reset) { delete cu.reset; update(cu); }
-    else saveUsers(users().filter(function (x) { return x.email !== cu.email; }));
+  function passProblem(p1, p2) {
+    if (p1.length < 8) return 'A senha precisa ter pelo menos 8 caracteres.';
+    if (p1 !== p2) return 'As duas senhas não são iguais.';
+    return '';
   }
-
-  function sendMail(params) {
-    if (!CONFIG.serviceId || !CONFIG.templateId || !CONFIG.publicKey)
-      return Promise.reject(new Error('O envio de e-mail ainda não foi configurado. Preencha as chaves do EmailJS (veja o LEIA-ME).'));
-    return fetch('https://api.emailjs.com/api/v1.0/email/send', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service_id: CONFIG.serviceId, template_id: CONFIG.templateId, user_id: CONFIG.publicKey, template_params: Object.assign({ data: new Date().toLocaleString('pt-BR') }, params) })
-    }).then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error('O EmailJS recusou o envio: ' + (t || r.status)); });
-    }, function () { throw new Error('Não consegui enviar o e-mail. Verifique a internet e tente de novo.'); });
-  }
+  function codeOf(id) { return $(id).value.replace(/\D/g, ''); }
 
   function msg(type, text) { st.msg = { type: type, text: text }; }
+  function fail(e) { st.busy = false; msg('err', errText(e)); render(); }
+  // Roda uma chamada do Supabase com o botão em "aguarde" e devolve os dados (ou o erro).
+  function call(fn) {
+    st.busy = true; render();
+    return Promise.resolve().then(fn).then(function (r) { st.busy = false; if (r && r.error) throw r.error; return r ? r.data : null; });
+  }
   function field(id, label, type, extra) { return '<label>' + label + '<input id="' + id + '" type="' + type + '" ' + (extra || '') + '></label>'; }
+  function submit(label, busyLabel) { return '<button class="btn primary" type="submit"' + (st.busy ? ' disabled' : '') + '>' + (st.busy ? busyLabel : label) + '</button>'; }
+  var CODE_ATTR = 'class="code-input" inputmode="numeric" maxlength="10" autocomplete="one-time-code" required';
+
   function render() {
     var m = st.mode, h = '';
     if (m === 'login' || m === 'signup') {
       h += '<div class="auth-tabs"><button type="button" data-auth="login" aria-pressed="' + (m === 'login') + '">Entrar</button><button type="button" data-auth="signup" aria-pressed="' + (m === 'signup') + '">Criar conta</button></div>';
     }
     if (st.msg) h += '<div class="msg ' + st.msg.type + '" role="status">' + esc(st.msg.text) + '</div>';
-    if (m === 'login') {
+    if (m === 'setup') {
+      h += '<div class="msg err">' + (st.nolib ? 'A biblioteca do banco de dados não carregou. Gere a página de novo com o build.ps1.'
+        : 'O banco de dados ainda não foi configurado. Abra src\\rateio-fatura.html, procure "CONFIGURAÇÃO DO BANCO DE DADOS", preencha url e anonKey e rode o build.ps1 (veja o LEIA-ME).') + '</div>';
+    } else if (m === 'loading') {
+      h += '<p class="muted" style="text-align:center">Conectando…</p>';
+    } else if (m === 'login') {
       h += '<form id="fLogin">' + field('aEmail', 'E-mail', 'email', 'autocomplete="username" required value="' + esc(st.email) + '"') + field('aPass', 'Senha', 'password', 'autocomplete="current-password" required') +
-        '<button class="btn primary" type="submit">Entrar</button></form>' +
+        submit('Entrar', 'Entrando…') + '</form>' +
         '<div class="between small"><button class="link" type="button" data-auth="reset">Esqueci a senha</button><button class="link" type="button" data-auth="code">Tenho um código</button></div>';
     } else if (m === 'signup') {
       h += '<form id="fSignup">' + field('sName', 'Nome', 'text', 'autocomplete="name" required') + field('sEmail', 'E-mail', 'email', 'autocomplete="username" required') +
         field('sPass', 'Senha (mínimo 8 caracteres)', 'password', 'autocomplete="new-password" minlength="8" required') + field('sPass2', 'Repita a senha', 'password', 'autocomplete="new-password" required') +
-        botFields() + '<button class="btn primary" type="submit"' + (st.busy ? ' disabled' : '') + '>' + (st.busy ? 'Enviando pedido…' : 'Pedir cadastro') + '</button></form>' +
+        botFields() + submit('Criar conta', 'Criando conta…') + '</form>' +
         '<p class="small muted">Vamos mandar um código para o seu e-mail. A conta só funciona depois que você digitar esse código.</p>';
     } else if (m === 'code') {
-      h += '<h2>Código de confirmação</h2><p class="small muted">Digite o código de 6 letras e números que chegou no seu e-mail. Ele vale por 15 minutos. Se não encontrar, olhe também o Spam.</p>' +
-        '<form id="fCode">' + field('cEmail', 'E-mail da conta', 'email', 'required value="' + esc(st.email) + '"') + field('cCode', 'Código', 'text', 'class="code-input" maxlength="6" autocomplete="one-time-code" required') +
-        '<button class="btn primary" type="submit">Confirmar</button></form><button class="link" type="button" data-auth="login">Voltar para o login</button>';
+      h += '<h2>Código de confirmação</h2><p class="small muted">Digite o código que chegou no seu e-mail. Se não encontrar, olhe também o Spam.</p>' +
+        '<form id="fCode">' + field('cEmail', 'E-mail da conta', 'email', 'required value="' + esc(st.email) + '"') + field('cCode', 'Código', 'text', CODE_ATTR) +
+        submit('Confirmar', 'Confirmando…') + '</form>' +
+        '<div class="between small"><button class="link" type="button" data-auth="login">Voltar para o login</button><button class="link" type="button" id="resendBtn">Mandar outro código</button></div>';
     } else if (m === 'reset') {
-      h += '<h2>Trocar a senha</h2><p class="small muted">Vamos mandar um código para o e-mail da conta. Com ele, a nova senha passa a valer.</p>' +
-        '<form id="fReset">' + field('rEmail', 'E-mail da conta', 'email', 'required value="' + esc(st.email) + '"') + field('rPass', 'Nova senha (mínimo 8 caracteres)', 'password', 'autocomplete="new-password" minlength="8" required') + field('rPass2', 'Repita a nova senha', 'password', 'autocomplete="new-password" required') +
-        botFields() + '<button class="btn primary" type="submit"' + (st.busy ? ' disabled' : '') + '>' + (st.busy ? 'Enviando…' : 'Pedir troca de senha') + '</button></form><button class="link" type="button" data-auth="login">Voltar para o login</button>';
+      h += '<h2>Trocar a senha</h2><p class="small muted">Vamos mandar um código para o e-mail da conta. Com ele você escolhe a nova senha.</p>' +
+        '<form id="fReset">' + field('rEmail', 'E-mail da conta', 'email', 'required value="' + esc(st.email) + '"') + botFields() +
+        submit('Mandar código', 'Enviando…') + '</form>' +
+        '<div class="between small"><button class="link" type="button" data-auth="login">Voltar para o login</button><button class="link" type="button" data-auth="newpass">Já tenho o código</button></div>';
+    } else if (m === 'newpass') {
+      h += '<h2>Nova senha</h2><p class="small muted">Digite o código que chegou no e-mail e a senha nova.</p>' +
+        '<form id="fNewPass">' + (st.recovered ? '' : field('nEmail', 'E-mail da conta', 'email', 'required value="' + esc(st.email) + '"') + field('nCode', 'Código', 'text', CODE_ATTR)) +
+        field('nPass', 'Nova senha (mínimo 8 caracteres)', 'password', 'autocomplete="new-password" minlength="8" required') + field('nPass2', 'Repita a nova senha', 'password', 'autocomplete="new-password" required') +
+        submit('Trocar a senha', 'Trocando…') + '</form>' + (st.recovered ? '' : '<button class="link" type="button" data-auth="login">Voltar para o login</button>');
     }
     $('authBody').innerHTML = h;
-    var first = $('authBody').querySelector('input:not([value]), input[value=""]') || $('authBody').querySelector('input');
+    var first = $('authBody').querySelector('input:not([value]):not([tabindex="-1"]), input[value=""]') || $('authBody').querySelector('input');
     if (first) first.focus();
   }
   function go(mode) { st.mode = mode; st.msg = null; render(); }
 
   // ----- contas: o dono do sistema pode excluir qualquer conta; os outros, só a própria -----
-  var OWNER = 'nicolasrenan10@gmail.com', current = null, acc = { confirm: null, msg: null };
-  function isOwner() { return current && current.email === OWNER; }
-  function canDelete(u) { return isOwner() || (current && u.email === current.email); }
+  // Quem garante isso é o banco (função excluir_conta no schema.sql); aqui só escondemos os botões.
+  function isOwner() { return current && current.owner; }
+  function canDelete(u) { return isOwner() || (current && u.id === current.id); }
   function initials(n) { var w = String(n || '?').trim().split(/\s+/); return ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : (w[0][1] || ''))).toUpperCase(); }
   function renderAcc() {
-    var list = users().sort(function (a, b) { return a.name.localeCompare(b.name); });
-    var h = '<div class="between"><h2 id="accTitle">Contas neste computador</h2><button class="xbtn" type="button" data-acc="close" aria-label="Fechar">×</button></div>' +
-      '<p class="small muted">' + (isOwner() ? 'Como dono do sistema, você pode excluir qualquer conta.' : 'Você pode excluir a sua própria conta.') + ' Cada conta tem as próprias faturas, e excluir a conta apaga as faturas dela.</p>';
+    var h = '<div class="between"><h2 id="accTitle">Contas</h2><button class="xbtn" type="button" data-acc="close" aria-label="Fechar">×</button></div>' +
+      '<p class="small muted">' + (isOwner() ? 'Como dono do sistema, você vê e pode excluir qualquer conta.' : 'Você pode excluir a sua própria conta.') + ' Excluir a conta apaga também as faturas dela, em todos os aparelhos.</p>';
     if (acc.msg) h += '<div class="msg ' + acc.msg.type + '" role="status">' + esc(acc.msg.text) + '</div>';
-    h += list.map(function (u) {
-      var me = current && u.email === current.email;
-      var row = '<div class="acc"><div class="acc-top"><span class="av" aria-hidden="true">' + esc(initials(u.name)) + '</span><span class="acc-name">' + esc(u.name) + (me ? ' <span class="pill ok">Você</span>' : '') +
-        '<small>' + esc(u.email) + ' · ' + (u.status === 'aprovado' ? 'confirmada' : 'esperando o código') + '</small></span>' +
-        (canDelete(u) && acc.confirm !== u.email ? '<button class="link danger" type="button" data-acc="ask" data-email="' + esc(u.email) + '">Excluir</button>' : '') + '</div>';
-      if (acc.confirm === u.email) {
-        row += '<form id="fDel" data-email="' + esc(u.email) + '"><p>' + (me ? 'Sua conta e todas as suas faturas serão excluídas, e você sairá do sistema.' : 'A conta de ' + esc(u.name) + ' e todas as faturas dela serão excluídas.') + ' Não dá para desfazer. Para confirmar, digite a sua senha.</p>' +
-          '<input id="delPass" type="password" autocomplete="current-password" aria-label="Sua senha" placeholder="Sua senha" required><button class="btn danger sm" type="submit">Excluir conta</button><button class="btn sm" type="button" data-acc="cancel">Cancelar</button></form>';
+    if (!acc.list) h += '<p class="muted">Carregando…</p>';
+    else h += acc.list.map(function (u) {
+      var mine = u.id === current.id;
+      var row = '<div class="acc"><div class="acc-top"><span class="av" aria-hidden="true">' + esc(initials(u.nome)) + '</span><span class="acc-name">' + esc(u.nome) + (mine ? ' <span class="pill ok">Você</span>' : '') +
+        '<small>' + esc(u.email) + ' · ' + (u.confirmada ? 'confirmada' : 'esperando o código') + '</small></span>' +
+        (canDelete(u) && acc.confirm !== u.id ? '<button class="link danger" type="button" data-acc="ask" data-id="' + esc(u.id) + '">Excluir</button>' : '') + '</div>';
+      if (acc.confirm === u.id) {
+        row += '<form id="fDel" data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '"><p>' + (mine ? 'Sua conta e todas as suas faturas serão excluídas, e você sairá do sistema.' : 'A conta de ' + esc(u.nome) + ' e todas as faturas dela serão excluídas.') + ' Não dá para desfazer. Para confirmar, digite a sua senha.</p>' +
+          '<input id="delPass" type="password" autocomplete="current-password" aria-label="Sua senha" placeholder="Sua senha" required><button class="btn danger sm" type="submit"' + (acc.busy ? ' disabled' : '') + '>' + (acc.busy ? 'Excluindo…' : 'Excluir conta') + '</button><button class="btn sm" type="button" data-acc="cancel">Cancelar</button></form>';
       }
       return row + '</div>';
     }).join('');
     $('accBody').innerHTML = h;
     var p = $('delPass'); if (p) p.focus();
   }
-  function openAcc() { acc = { confirm: null, msg: null }; $('accModal').hidden = false; renderAcc(); }
+  function loadAcc() {
+    acc.list = null; renderAcc();
+    sb.rpc('listar_contas').then(function (r) {
+      if (r.error) throw r.error;
+      acc.list = r.data || []; renderAcc();
+    }).catch(function (e) { acc.list = []; acc.msg = { type: 'err', text: errText(e) }; renderAcc(); });
+  }
+  function openAcc() { acc = { list: null, confirm: null, msg: null, busy: false }; $('accModal').hidden = false; loadAcc(); }
   function closeAcc() { $('accModal').hidden = true; $('accountsBtn').focus(); }
+  function forgetLocal(email) { try { localStorage.removeItem('rateio-fatura-v2:' + email); localStorage.removeItem('rateio-fatura-v2:' + email + ':pendente'); } catch (e) { /* ok */ } }
 
   function unlock(user) {
-    current = user;
-    try { sessionStorage.setItem(SKEY, user.email); } catch (e) { /* sessão só na memória */ }
+    if (current || !user) return;
+    var email = norm(user.email);
+    current = { id: user.id, email: email, name: (user.user_metadata && user.user_metadata.name) || email, owner: email === OWNER };
     document.body.classList.add('unlocked');
-    $('whoami').textContent = user.name;
-    window.__startApp(user.email, user.email === OWNER);
+    $('whoami').textContent = current.name;
+    window.__startApp(current, sb);
+  }
+  function logout() {
+    sb.auth.signOut({ scope: 'local' }).catch(function () { /* ok */ }).then(function () { location.reload(); });
   }
 
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-auth]'); if (b) { go(b.dataset.auth); return; }
+    if (e.target.id === 'resendBtn') { resend(); return; }
     if (e.target.id === 'accountsBtn') { openAcc(); return; }
     if (e.target.id === 'accModal') { closeAcc(); return; }
     var a = e.target.closest('[data-acc]');
     if (a) {
       if (a.dataset.acc === 'close') closeAcc();
-      else if (a.dataset.acc === 'ask') { acc.confirm = a.dataset.email; acc.msg = null; renderAcc(); }
+      else if (a.dataset.acc === 'ask') { acc.confirm = a.dataset.id; acc.msg = null; renderAcc(); }
       else if (a.dataset.acc === 'cancel') { acc.confirm = null; renderAcc(); }
       return;
     }
-    if (e.target.id === 'logoutBtn') { try { sessionStorage.removeItem(SKEY); } catch (er) { /* ok */ } location.reload(); }
+    if (e.target.id === 'logoutBtn') logout();
   });
+
+  function resend() {
+    var em = norm($('cEmail').value); st.email = em;
+    if (!validEmail(em)) { msg('err', 'Digite o e-mail da conta.'); render(); return; }
+    var wait = RESEND_GAP - (Date.now() - st.lastSend);
+    if (wait > 0) { msg('err', 'Espere ' + waitText(wait) + ' para pedir outro código.'); render(); return; }
+    call(function () { return sb.auth.resend({ type: 'signup', email: em }); }).then(function () {
+      st.lastSend = Date.now(); msg('ok', 'Mandamos outro código para ' + em + '.'); render();
+    }).catch(fail);
+  }
+
   document.addEventListener('submit', function (e) {
-    var id = e.target.id; if (['fLogin', 'fSignup', 'fCode', 'fReset', 'fDel'].indexOf(id) < 0) return;
+    var id = e.target.id; if (['fLogin', 'fSignup', 'fCode', 'fReset', 'fNewPass', 'fDel'].indexOf(id) < 0) return;
     e.preventDefault(); e.stopImmediatePropagation();
+    if (id !== 'fDel' && st.busy) return;
 
     if (id === 'fDel') {
-      var target = e.target.dataset.email, me = find(current.email);
-      if (!me || !canDelete({ email: target })) return;
-      var dl = lockLeft(me.email);
-      if (dl) { acc.msg = { type: 'err', text: 'Muitas senhas erradas. Espere ' + waitText(dl) + '.' }; renderAcc(); return; }
-      hash($('delPass').value, me.salt).then(function (h) {
-        if (h !== me.pass) { addFail(me.email); acc.msg = { type: 'err', text: 'Senha incorreta. A conta não foi excluída.' }; renderAcc(); return; }
-        clearFails(me.email);
-        var gone = find(target);
-        saveUsers(users().filter(function (u) { return u.email !== target; }));
-        try { localStorage.removeItem('rateio-fatura-v2:' + target); } catch (er) { /* ok */ }
-        if (target === current.email) { try { sessionStorage.removeItem(SKEY); } catch (er) { /* ok */ } location.reload(); return; }
-        acc.confirm = null; acc.msg = { type: 'ok', text: 'Conta de ' + (gone ? gone.name : target) + ' excluída.' }; renderAcc();
+      if (acc.busy) return;
+      var target = e.target.dataset.id, targetEmail = e.target.dataset.email, self = target === current.id;
+      acc.busy = true; acc.msg = null; renderAcc();
+      // Confere a senha de quem está excluindo antes de apagar, num cliente à parte para não mexer na sessão atual.
+      var check = window.supabase.createClient(CONFIG.url, CONFIG.anonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'rateio-fatura-conferencia' } });
+      check.auth.signInWithPassword({ email: current.email, password: $('delPass').value }).then(function (r) {
+        if (r.error) { r.error.wrongPass = /invalid login|invalid_credentials/i.test(r.error.message + ' ' + (r.error.code || '')); throw r.error; }
+        return sb.rpc('excluir_conta', { alvo: target });
+      }).then(function (r) {
+        if (r.error) throw r.error;
+        forgetLocal(targetEmail);
+        if (self) { logout(); return; }
+        acc.busy = false; acc.confirm = null; acc.msg = { type: 'ok', text: 'Conta de ' + targetEmail + ' excluída.' }; loadAcc();
+      }).catch(function (er) {
+        acc.busy = false; acc.msg = { type: 'err', text: er.wrongPass ? 'Senha incorreta. A conta não foi excluída.' : errText(er) }; renderAcc();
       });
+      return;
     }
 
     if (id === 'fLogin') {
-      var email = norm($('aEmail').value), pass = $('aPass').value, u = find(email);
+      var email = norm($('aEmail').value), pass = $('aPass').value;
       st.email = email;
-      var left = lockLeft(email);
-      if (left) { msg('err', 'Muitas senhas erradas para esse e-mail. Espere ' + waitText(left) + ' para tentar de novo.'); render(); return; }
-      (u ? hash(pass, u.salt) : hash(pass, 'sem-conta')).then(function (h) {
-        if (!u || h !== u.pass) {
-          var f = addFail(email);
-          msg('err', f.until > Date.now() ? 'Muitas senhas erradas. Esse e-mail ficou bloqueado por ' + waitText(f.until - Date.now()) + '.' : 'E-mail ou senha incorretos.');
-          render(); return;
+      call(function () { return sb.auth.signInWithPassword({ email: email, password: pass }); }).then(function (d) { unlock(d.user); }).catch(function (er) {
+        if ((er && er.code === 'email_not_confirmed') || /not confirmed/i.test((er && er.message) || '')) {
+          st.busy = false; st.mode = 'code'; msg('info', 'Sua conta ainda não foi confirmada. Digite o código que chegou no seu e-mail ou peça outro.'); render(); return;
         }
-        clearFails(email);
-        if (u.status !== 'aprovado') { st.mode = 'code'; msg('info', 'Sua conta ainda não foi confirmada. Digite o código que chegou no seu e-mail.'); render(); return; }
-        unlock(u);
+        fail(er);
       });
     }
 
     if (id === 'fSignup') {
-      var name = $('sName').value.trim().replace(/\s+/g, ' '), em = norm($('sEmail').value), p1 = $('sPass').value, p2 = $('sPass2').value, ex = find(em);
-      var bot = botCheck(); if (bot) { msg('err', bot); render(); return; }
-      var np = nameProblem(name); if (np) { msg('err', np); render(); return; }
-      if (!validEmail(em)) { msg('err', 'Digite um e-mail válido.'); render(); return; }
-      if (p1.length < 8) { msg('err', 'A senha precisa ter pelo menos 8 caracteres.'); render(); return; }
-      if (p1 !== p2) { msg('err', 'As duas senhas não são iguais.'); render(); return; }
-      if (ex && ex.status === 'aprovado') { msg('err', 'Já existe uma conta com esse e-mail. Use "Entrar".'); render(); return; }
-      var sb = sendBlock(em); if (sb) { msg('err', sb); render(); return; }
-      var s = salt(), c = code();
-      recordSend(em); st.busy = true; st.email = em; render();
-      sendMail({ to_email: em, tipo: 'Confirmação de cadastro', nome: name, usuario: em, codigo: c }).then(function () {
-        return Promise.all([hash(p1, s), hash(c, s)]);
-      }).then(function (h) {
-        update({ email: em, name: name, salt: s, pass: h[0], status: 'pendente', code: h[1], codeExp: Date.now() + CODE_TTL, tries: 0, created: Date.now() });
-        st.busy = false; st.mode = 'code';
-        msg('ok', 'Enviamos um código para ' + em + '. Digite ele aqui para ativar a conta.');
-        render();
-      }).catch(function (err) { st.busy = false; msg('err', err.message); render(); });
+      var name = $('sName').value.trim().replace(/\s+/g, ' '), em = norm($('sEmail').value), p1 = $('sPass').value, p2 = $('sPass2').value;
+      var problem = botCheck() || nameProblem(name) || (validEmail(em) ? '' : 'Digite um e-mail válido.') || passProblem(p1, p2);
+      if (problem) { msg('err', problem); render(); return; }
+      st.email = em;
+      call(function () { return sb.auth.signUp({ email: em, password: p1, options: { data: { name: name } } }); }).then(function (d) {
+        // O Supabase não conta se o e-mail já tem conta; uma conta já confirmada volta sem "identities".
+        if (d.user && d.user.identities && !d.user.identities.length) { msg('err', 'Já existe uma conta com esse e-mail. Use "Entrar" ou "Esqueci a senha".'); render(); return; }
+        if (d.session) { unlock(d.user); return; } // confirmação por e-mail desligada no Supabase
+        st.lastSend = Date.now(); st.mode = 'code';
+        msg('ok', 'Enviamos um código para ' + em + '. Digite ele aqui para ativar a conta.'); render();
+      }).catch(fail);
     }
 
     if (id === 'fCode') {
-      var ce = norm($('cEmail').value), cc = $('cCode').value.toUpperCase().replace(/[^A-Z0-9]/g, ''), cu = find(ce);
+      var ce = norm($('cEmail').value), cc = codeOf('cCode');
       st.email = ce;
-      if (!cu || (!cu.code && !cu.reset)) { msg('err', 'Não há código pendente para esse e-mail.'); render(); return; }
-      var exp = cu.reset ? cu.reset.exp : cu.codeExp;
-      if (exp && Date.now() > exp) { dropCode(cu); msg('err', 'Esse código expirou (vale 15 minutos). Peça um novo.'); render(); return; }
-      hash(cc, cu.salt).then(function (h) {
-        if (cu.reset && h === cu.reset.code) { cu.pass = cu.reset.pass; cu.salt = cu.reset.salt; delete cu.reset; update(cu); clearFails(ce); st.mode = 'login'; msg('ok', 'Senha trocada. Entre com a nova senha.'); render(); return; }
-        if (cu.code && h === cu.code) { cu.status = 'aprovado'; delete cu.code; delete cu.codeExp; delete cu.tries; update(cu); st.mode = 'login'; msg('ok', 'Conta confirmada. Agora entre com sua senha.'); render(); return; }
-        var holder = cu.reset || cu; holder.tries = (holder.tries || 0) + 1;
-        if (holder.tries >= CODE_TRIES) { dropCode(cu); msg('err', 'Código bloqueado depois de ' + CODE_TRIES + ' tentativas erradas. Peça um novo código.'); render(); return; }
-        update(cu); var rest = CODE_TRIES - holder.tries; msg('err', 'Código incorreto. ' + (rest === 1 ? 'Resta 1 tentativa.' : 'Restam ' + rest + ' tentativas.')); render();
-      });
+      if (cc.length < 6) { msg('err', 'Digite o código completo que chegou no e-mail.'); render(); return; }
+      call(function () { return sb.auth.verifyOtp({ email: ce, token: cc, type: 'signup' }); }).then(function (d) { unlock(d.user); }).catch(fail);
     }
 
     if (id === 'fReset') {
-      var re = norm($('rEmail').value), r1 = $('rPass').value, r2 = $('rPass2').value, ru = find(re);
+      var re = norm($('rEmail').value);
       st.email = re;
-      var rb = botCheck(); if (rb) { msg('err', rb); render(); return; }
-      if (!ru || ru.status !== 'aprovado') { msg('err', 'Não existe conta confirmada com esse e-mail.'); render(); return; }
-      if (r1.length < 8) { msg('err', 'A senha precisa ter pelo menos 8 caracteres.'); render(); return; }
-      if (r1 !== r2) { msg('err', 'As duas senhas não são iguais.'); render(); return; }
-      var rsb = sendBlock(re); if (rsb) { msg('err', rsb); render(); return; }
-      var ns = salt(), rc = code();
-      recordSend(re); st.busy = true; render();
-      sendMail({ to_email: re, tipo: 'Troca de senha', nome: ru.name, usuario: re, codigo: rc }).then(function () {
-        return Promise.all([hash(r1, ns), hash(rc, ru.salt)]);
-      }).then(function (h) {
-        ru.reset = { salt: ns, pass: h[0], code: h[1], exp: Date.now() + CODE_TTL, tries: 0 }; update(ru);
-        st.busy = false; st.mode = 'code';
-        msg('ok', 'Enviamos um código para ' + re + '. Digite ele aqui para confirmar a nova senha.');
-        render();
-      }).catch(function (err) { st.busy = false; msg('err', err.message); render(); });
+      var rp = botCheck() || (validEmail(re) ? '' : 'Digite um e-mail válido.');
+      if (rp) { msg('err', rp); render(); return; }
+      call(function () { return sb.auth.resetPasswordForEmail(re); }).then(function () {
+        st.lastSend = Date.now(); st.mode = 'newpass';
+        msg('ok', 'Se existe uma conta com ' + re + ', mandamos um código para esse e-mail. Digite o código e a senha nova.'); render();
+      }).catch(fail);
+    }
+
+    if (id === 'fNewPass') {
+      var n1 = $('nPass').value, n2 = $('nPass2').value, pp = passProblem(n1, n2);
+      if (pp) { msg('err', pp); render(); return; }
+      var step = Promise.resolve();
+      if (!st.recovered) {
+        var ne = norm($('nEmail').value), nc = codeOf('nCode');
+        st.email = ne;
+        if (nc.length < 6) { msg('err', 'Digite o código completo que chegou no e-mail.'); render(); return; }
+        step = call(function () { return sb.auth.verifyOtp({ email: ne, token: nc, type: 'recovery' }); }).then(function () { st.recovered = true; });
+      }
+      step.then(function () { return call(function () { return sb.auth.updateUser({ password: n1 }); }); }).then(function (d) {
+        st.recovered = false; unlock(d.user);
+      }).catch(function (er) {
+        // Senha nova igual à antiga: o código já valeu, então é só entrar.
+        if (er && er.code === 'same_password') { st.busy = false; sb.auth.getUser().then(function (r) { st.recovered = false; unlock(r.data && r.data.user); }); return; }
+        fail(er);
+      });
     }
   }, true);
 
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('accModal').hidden) closeAcc(); });
 
-  // Ao abrir: se já entrou nesta janela, continua; senão mostra o login.
-  var saved = null; try { saved = sessionStorage.getItem(SKEY); } catch (e) { /* ok */ }
-  var su = saved ? find(saved) : null;
-  if (su && su.status === 'aprovado') unlock(su);
-  else { st.mode = users().length ? 'login' : 'signup'; render(); }
+  // Ao abrir: se a conta já está conectada neste aparelho, entra direto; senão mostra o login.
+  if (!CONFIG.url || !CONFIG.anonKey) { st.mode = 'setup'; render(); return; }
+  if (!window.supabase || !window.supabase.createClient) { st.mode = 'setup'; st.nolib = true; render(); return; }
+  sb = window.supabase.createClient(CONFIG.url, CONFIG.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'rateio-fatura-sessao' } });
+  sb.auth.onAuthStateChange(function (ev) { if (ev === 'SIGNED_OUT' && current) setTimeout(function () { location.reload(); }, 0); });
+  st.mode = 'loading'; render();
+  sb.auth.getSession().then(function (r) {
+    var s = r && r.data && r.data.session;
+    if (s) unlock(s.user); else go('login');
+  }, function () { go('login'); });
 })();
 </script>
