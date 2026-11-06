@@ -1,0 +1,99 @@
+RATEIO DA FATURA
+================
+
+Como abrir
+----------
+Dê dois cliques em "Rateio da Fatura.html". Abre no seu navegador e funciona
+sem internet, inclusive a leitura de PDF. Para ter um atalho, clique com o
+botão direito no arquivo > Enviar para > Área de trabalho (criar atalho).
+
+O sistema sempre abre na tela Início, sem fatura aberta. Cada fatura que você
+divide fica salva com o mês dela (escolha o mês no cartão colorido do topo).
+Em "Histórico" você filtra por mês, pessoa ou compra e vê quanto cada um gastou.
+
+Login e cadastro
+----------------
+Ao abrir, o sistema pede login. Quem não tem conta clica em "Criar conta".
+Um código de 6 caracteres vai para o e-mail da própria pessoa. A conta só
+passa a funcionar depois que esse código é digitado em "Tenho um código".
+"Esqueci a senha" funciona do mesmo jeito: o código vai para o e-mail da conta.
+Nenhum aviso vai para o e-mail do dono do sistema.
+
+Para excluir uma conta, entre no sistema e clique em "Contas" (no topo, ao
+lado de "Sair"). A conta nicolasrenan10@gmail.com é a dona do sistema e pode
+excluir qualquer conta; as outras só podem excluir a si mesmas. A exclusão
+pede a sua senha e apaga também as faturas daquela conta.
+
+Cada conta tem as próprias faturas e o próprio Histórico: quem entra só vê o
+que é seu. As faturas salvas antes dessa separação ficaram com a conta
+nicolasrenan10@gmail.com. Os dados ficam neste computador e neste navegador;
+em outro computador cada conta começa vazia.
+As senhas ficam guardadas só como hash (PBKDF2), nunca em texto.
+Cadastro e troca de senha precisam de internet; o resto funciona offline.
+
+Configurar o envio de e-mail (EmailJS) - uma vez só
+---------------------------------------------------
+1. Crie uma conta grátis em https://www.emailjs.com
+2. Em "Email Services", adicione o Gmail (nicolasrenan10@gmail.com).
+   Anote o Service ID (ex.: service_abc123).
+3. Em "Email Templates", crie um modelo:
+     To Email:  {{to_email}}
+     Subject:   Rateio da Fatura - {{tipo}} de {{nome}}
+     Reply To:  (vazio)
+     Conteúdo:  Olá, {{nome}}!
+                Seu código do Rateio da Fatura: {{codigo}}
+                Digite esse código no sistema para concluir: {{tipo}}.
+                Se não foi você que pediu, ignore este e-mail.
+   Anote o Template ID (ex.: template_xyz789).
+4. Em "Account" > "General", copie a Public Key.
+5. Abra src\rateio-fatura.html, procure "CONFIGURAÇÃO DO E-MAIL" e preencha
+   serviceId, templateId e publicKey. Depois rode o build.ps1.
+
+Proteção contra robôs e tentativas repetidas
+--------------------------------------------
+- Cadastro e troca de senha têm um campo invisível (armadilha para robôs),
+  exigem pelo menos 3 segundos de preenchimento e uma conta simples.
+- No máximo 1 código por minuto para cada e-mail e 5 códigos por hora
+  neste computador.
+- O código vale 15 minutos e aceita 5 tentativas; depois é preciso pedir outro.
+- Login: a cada 5 senhas erradas, o e-mail fica bloqueado por 1, 2, 4, 8...
+  até 30 minutos.
+- O nome não aceita links nem símbolos, para ninguém usar o e-mail de código
+  para mandar propaganda.
+No painel do EmailJS (Account > Security), deixe desligado "Allow EmailJS API
+for non-browser applications" e ative um limite de envios (rate limit).
+
+Limites da segurança
+--------------------
+O login impede que alguém use o sistema sem senha pelo jeito normal. Como
+tudo roda no próprio computador, sem servidor, uma pessoa com acesso ao PC e
+conhecimento técnico consegue contornar o login mexendo nos dados do
+navegador. As faturas não ficam criptografadas.
+
+Guarde a pasta num lugar fixo (por exemplo, Documentos). O navegador salva os
+seus dados ligados ao caminho do arquivo: se você mover ou renomear o arquivo,
+ele abre vazio de novo (os dados antigos continuam no caminho antigo).
+
+RateioFatura.exe faz o mesmo, numa janela própria do Microsoft Edge. Ele não
+tem assinatura digital, então o Windows com o "Controle Inteligente de
+Aplicativos" ligado bloqueia o arquivo sem opção de liberar. Nesse caso, use o
+.html. Em computadores sem esse controle, o Windows pode mostrar "O Windows
+protegeu o computador": clique em "Mais informações" > "Executar assim mesmo".
+O .exe guarda a página em %LOCALAPPDATA%\RateioFatura.
+
+Privacidade
+-----------
+A fatura é lida no próprio navegador e nunca é enviada para a internet.
+Limpar os dados de navegação apaga o progresso salvo.
+
+Código
+------
+src\rateio-fatura.html   A página: leitura da fatura, pessoas e divisão.
+src\Program.cs           O executável que abre a página no Edge.
+src\lib\                 pdf.js 3.11.174 (Mozilla, licença Apache 2.0), leitor de PDF.
+build.ps1                Gera de novo "Rateio da Fatura.html" e o .exe depois de
+                         mudar o código.
+
+Para gerar de novo, rode no PowerShell, dentro desta pasta:
+  powershell -ExecutionPolicy Bypass -File build.ps1
+Não precisa instalar nada: usa o compilador C# que já vem no Windows.

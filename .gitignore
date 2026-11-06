@@ -1,0 +1,7 @@
+# Arquivos gerados pelo build.ps1 (dá para recriar a partir de src\)
+RateioFatura/build/
+RateioFatura/RateioFatura.exe
+RateioFatura/Rateio da Fatura.html
+
+# Pacote para distribuir
+*.zip
