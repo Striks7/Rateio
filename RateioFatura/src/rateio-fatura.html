@@ -597,7 +597,8 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
       if (isDirty()) { push(); return; }
       if (r.data && r.data.dados) {
         var remote = Object.assign({ v: 2, people: [], faturas: [] }, r.data.dados);
-        if (JSON.stringify(remote) !== JSON.stringify(db)) { db = remote; cacheWrite(); render(); }
+        if (JSON.stringify(remote) !== JSON.stringify(db)) { db = remote; cacheWrite(); if (!(ui.startRateio && ui.view === 'inicio' && openLatest())) render(); }
+        ui.startRateio = false;
         syncState('ok');
       } else if (db.faturas.length || db.people.length) { setDirty(true); push(); } // primeira vez: sobe o que já estava neste aparelho
       else syncState('ok');
@@ -1133,10 +1134,13 @@ td.desc-cell { white-space: normal; min-width: 180px; font-weight: 600; }
   new MutationObserver(paintTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   paintTheme();
 
-  // Sempre abre na tela inicial, sem fatura aberta. Só começa depois do login.
+  // Abre direto na tela de rateio, com a fatura mais recente. Sem nenhuma fatura, abre no Início.
+  // Só começa depois do login.
+  function openLatest() { var last = sortedFaturas()[0]; if (!last) return false; ui.curId = last.id; go('rateio'); return true; }
   window.__startApp = function (user, client) {
     me = user; sb = client; KEY = BASE + ':' + user.email; db = load(user.owner);
-    go(location.hash === '#historico' ? 'historico' : 'inicio');
+    if (location.hash === '#historico') go('historico');
+    else if (!openLatest()) { ui.startRateio = true; go('inicio'); }
     syncState(isDirty() ? 'saving' : 'loading'); pull();
     window.addEventListener('online', pull);
     document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') pull(); });

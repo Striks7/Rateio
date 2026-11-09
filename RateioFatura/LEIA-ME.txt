@@ -7,7 +7,8 @@ Dê dois cliques em "Rateio da Fatura.html". Abre no seu navegador. Para ter um
 atalho, clique com o botão direito no arquivo > Enviar para > Área de trabalho
 (criar atalho).
 
-O sistema sempre abre na tela Início, sem fatura aberta. Cada fatura que você
+O sistema abre direto na tela Rateio, com a fatura mais recente. Se ainda não
+houver nenhuma fatura, abre na tela Início. Cada fatura que você
 divide fica salva com o mês dela (escolha o mês no cartão colorido do topo).
 Em "Histórico" você filtra por mês, pessoa ou compra e vê quanto cada um gastou.
 
