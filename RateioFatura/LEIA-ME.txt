@@ -29,10 +29,11 @@ com a mesma conta, você vê as mesmas faturas em qualquer computador ou celular
 
 Login e cadastro
 ----------------
-Quem não tem conta clica em "Criar conta". Um código vai para o e-mail da
-própria pessoa, e a conta só passa a funcionar depois que esse código é
-digitado. "Esqueci a senha" manda um código para o e-mail da conta; com ele
-você escolhe a senha nova. Entrar e criar conta precisam de internet. Depois de
+A tela inicial só tem o login: não dá para criar conta pelo sistema. Para
+criar uma conta nova, entre no painel do Supabase > Authentication > Users >
+Add user > Create new user, preencha e-mail e senha e marque "Auto Confirm
+User". "Esqueci a senha" manda um código para o e-mail da conta; com ele
+você escolhe a senha nova. Entrar precisa de internet. Depois de
 entrar, a conta fica conectada neste aparelho até você clicar em "Sair".
 
 As contas antigas, que ficavam só neste computador, não valem mais: cada pessoa
