@@ -27,23 +27,18 @@ com a mesma conta, você vê as mesmas faturas em qualquer computador ou celular
 - Na primeira vez que uma conta entra, as faturas que já estavam salvas neste
   computador (com o mesmo e-mail) sobem para a nuvem.
 
-Login e cadastro
-----------------
-A tela inicial só tem o login: não dá para criar conta pelo sistema. Para
-criar uma conta nova, entre no painel do Supabase > Authentication > Users >
-Add user > Create new user, preencha e-mail e senha e marque "Auto Confirm
-User". "Esqueci a senha" manda um código para o e-mail da conta; com ele
-você escolhe a senha nova. Entrar precisa de internet. Depois de
-entrar, a conta fica conectada neste aparelho até você clicar em "Sair".
-
-As contas antigas, que ficavam só neste computador, não valem mais: cada pessoa
-cria a conta de novo, com o mesmo e-mail, e as faturas dela neste computador
-sobem para a nuvem.
-
-Para excluir uma conta, entre no sistema e clique em "Contas" (no topo, ao
-lado de "Sair"). A conta nicolasrenan10@gmail.com é a dona do sistema: vê
-todas as contas e pode excluir qualquer uma. As outras só veem e excluem a si
-mesmas. A exclusão pede a sua senha e apaga também as faturas daquela conta.
+Login
+-----
+O sistema só tem a tela de login: não dá para criar conta, trocar a senha nem
+excluir conta por ele. Tudo isso é feito no painel do Supabase, em
+"Authentication" > "Users":
+- Criar conta: "Add user" > "Create new user", preencha e-mail e senha e marque
+  "Auto Confirm User".
+- Trocar a senha: clique na conta > "Reset password" ou altere a senha ali.
+- Excluir conta: clique na conta > "Delete user". Isso apaga também as faturas
+  dela.
+Entrar precisa de internet. Depois de entrar, a conta fica conectada neste
+aparelho até você clicar em "Sair".
 
 Configurar o Supabase - uma vez só
 ----------------------------------
@@ -53,38 +48,13 @@ Configurar o Supabase - uma vez só
 2. Abra "SQL Editor", cole todo o conteúdo do arquivo supabase\schema.sql e
    clique em "Run". Isso cria a tabela e as regras que deixam cada conta ver
    só os próprios dados.
-3. Em "Authentication" > "Sign In / Providers" > "Email":
-     - deixe ligado "Confirm email";
-     - em "Minimum password length", coloque 8.
-4. Em "Authentication" > "Emails" > "Templates", troque o texto de dois
-   modelos para mandar o código em vez de um link:
-     "Confirm signup"
-       Subject:  Rateio da Fatura - seu código de cadastro
-       Body:     <p>Olá, {{ .Data.name }}!</p>
-                 <p>Seu código do Rateio da Fatura: <b>{{ .Token }}</b></p>
-                 <p>Digite esse código no sistema para ativar a conta.
-                 Se não foi você que pediu, ignore este e-mail.</p>
-     "Reset Password"
-       Subject:  Rateio da Fatura - código para trocar a senha
-       Body:     <p>Seu código para trocar a senha: <b>{{ .Token }}</b></p>
-                 <p>Se não foi você que pediu, ignore este e-mail.</p>
-5. Envio de e-mail: o envio que vem com o Supabase só manda para os membros do
-   seu projeto e poucos por hora. Para mandar para qualquer pessoa, use o
-   Gmail. Em "Authentication" > "Emails" > "SMTP Settings", ligue
-   "Enable custom SMTP" e preencha:
-     Sender email:  nicolasrenan10@gmail.com
-     Sender name:   Rateio da Fatura
-     Host:          smtp.gmail.com
-     Port:          465
-     Username:      nicolasrenan10@gmail.com
-     Password:      uma "senha de app" do Google (não é a senha do Gmail).
-                    Crie em https://myaccount.google.com/apppasswords (precisa
-                    da verificação em duas etapas ligada na conta Google).
-6. Em "Project Settings" > "API Keys", copie a chave pública ("anon public",
+3. Em "Authentication" > "Sign In / Providers", desligue "Allow new users to
+   sign up" (as contas são criadas pelo painel; veja "Login" acima).
+4. Em "Project Settings" > "API Keys", copie a chave pública ("anon public",
    na aba de chaves legadas, ou a "publishable"). Em "Project Settings" >
    "Data API" (ou na página inicial do projeto), copie a "Project URL"
    (ex.: https://abcdefgh.supabase.co).
-7. Abra src\rateio-fatura.html, procure "CONFIGURAÇÃO DO BANCO DE DADOS" e
+5. Abra src\rateio-fatura.html, procure "CONFIGURAÇÃO DO BANCO DE DADOS" e
    preencha url e anonKey. Depois rode o build.ps1.
 
 Nunca coloque no código a chave "service_role" ou "secret": ela ignora todas
@@ -93,22 +63,12 @@ as regras do banco. A chave pública pode ficar no código sem problema.
 Se o projeto grátis do Supabase ficar uma semana sem uso, ele é pausado. Para
 voltar, entre no painel do Supabase e clique em "Restore project".
 
-Proteção contra robôs e tentativas repetidas
---------------------------------------------
-- Cadastro e troca de senha têm um campo invisível (armadilha para robôs),
-  exigem pelo menos 3 segundos de preenchimento e uma conta simples.
-- O próprio Supabase limita quantos e-mails e tentativas de login cada
-  endereço pode fazer (ajuste em "Authentication" > "Rate Limits"). Um código
-  novo só pode ser pedido 60 segundos depois do anterior.
-- O nome não aceita links nem símbolos, para ninguém usar o e-mail de código
-  para mandar propaganda.
-
 Segurança
 ---------
 A senha é conferida pelo Supabase, não no navegador, e fica guardada lá só
 como hash. As regras do banco (supabase\schema.sql) garantem que cada conta só
-lê e altera as próprias faturas, e que só o dono do sistema exclui contas dos
-outros. Quem usa o mesmo computador e não clica em "Sair" deixa a conta aberta
+lê e altera as próprias faturas. O Supabase também limita as tentativas de
+login seguidas. Quem usa o mesmo computador e não clica em "Sair" deixa a conta aberta
 para a próxima pessoa. A cópia guardada no aparelho não é criptografada.
 
 RateioFatura.exe faz o mesmo, numa janela própria do Microsoft Edge. Ele não
@@ -131,6 +91,7 @@ src\Program.cs           O executável que abre a página no Edge.
 src\lib\                 pdf.js 3.11.174 (Mozilla, licença Apache 2.0), leitor de PDF.
                          supabase-js 2.95.3 (licença MIT), acesso ao banco.
 supabase\schema.sql      Tabela e regras do banco de dados.
+VERSAO.txt               Número da versão (aparece no rodapé e no .exe).
 build.ps1                Gera de novo "Rateio da Fatura.html" e o .exe depois de
                          mudar o código.
 

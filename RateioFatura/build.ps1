@@ -8,7 +8,10 @@ $out  = Join-Path $root 'build'
 New-Item -ItemType Directory -Force $out | Out-Null
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$page   = [IO.File]::ReadAllText((Join-Path $src 'rateio-fatura.html'), $utf8)
+# A versão fica num lugar só (VERSAO.txt) e vai para o rodapé da página e para o .exe.
+$ver    = ([IO.File]::ReadAllText((Join-Path $root 'VERSAO.txt'), $utf8)).Trim()
+if ($ver -notmatch '^\d+\.\d+\.\d+$') { throw "VERSAO.txt precisa ter só o número, por exemplo 1.0.5 (está: '$ver')." }
+$page   = [IO.File]::ReadAllText((Join-Path $src 'rateio-fatura.html'), $utf8).Replace('{{VERSAO}}', $ver)
 $pdf    = [IO.File]::ReadAllText((Join-Path $src 'lib\pdf.min.js'), $utf8)
 $worker = [IO.File]::ReadAllText((Join-Path $src 'lib\pdf.worker.min.js'), $utf8)
 $supa   = [IO.File]::ReadAllText((Join-Path $src 'lib\supabase.min.js'), $utf8)
@@ -24,8 +27,10 @@ Copy-Item $app (Join-Path $root 'Rateio da Fatura.html') -Force
 
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
+$verCs = Join-Path $out 'Versao.cs'
+[IO.File]::WriteAllText($verCs, "[assembly: System.Reflection.AssemblyVersion(`"$ver.0`")]`n[assembly: System.Reflection.AssemblyFileVersion(`"$ver.0`")]`n", $utf8)
 & $csc /nologo /target:winexe /optimize+ /codepage:65001 `
   "/out:$(Join-Path $root 'RateioFatura.exe')" "/resource:$app,app.html" `
-  /reference:System.Windows.Forms.dll (Join-Path $src 'Program.cs')
+  /reference:System.Windows.Forms.dll (Join-Path $src 'Program.cs') $verCs
 if ($LASTEXITCODE -ne 0) { throw 'A compilação falhou.' }
-Write-Host 'Pronto: RateioFatura.exe'
+Write-Host "Pronto: RateioFatura.exe (versão $ver)"

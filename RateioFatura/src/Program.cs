@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Rateio da Fatura")]
 [assembly: AssemblyProduct("Rateio da Fatura")]
-[assembly: AssemblyVersion("1.0.1.0")]
+// A versão (AssemblyVersion) vem do VERSAO.txt: o build.ps1 gera build\Versao.cs.
 
 static class Program
 {
